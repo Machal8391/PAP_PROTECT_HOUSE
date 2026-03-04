@@ -1,0 +1,181 @@
+#include <Keypad.h>
+
+const bool DEBUG = true;
+const long BAUD_RATE = 9600;
+
+const byte PIN_LED    = 3;
+const byte PIN_BUZZER = 4;
+const byte PIN_PIR    = A5;
+const byte PIN_BOTAO  = 2;
+
+const String CODIGO_CORRECTO = "2745";
+
+/* ===================== KEYPAD ===================== */
+const byte LINHAS = 4;
+const byte COLUNAS = 4;
+
+char mapaTeclas[LINHAS][COLUNAS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+
+byte pinosLinhas[LINHAS]   = {13, 12, 11, 10};
+byte pinosColunas[COLUNAS] = {9, 8, 7, 6};
+
+Keypad keypad(makeKeymap(mapaTeclas), pinosLinhas, pinosColunas, LINHAS, COLUNAS);
+
+/* ===================== ESTADOS ===================== */
+enum EstadoSistema : byte {
+  STANDBY,
+  ARMING,
+  ARMED,
+  TRIGGERED
+};
+
+EstadoSistema estadoAtual = STANDBY;
+
+/* ===================== VARIÁVEIS ===================== */
+String codigoDigitado = "";
+
+unsigned long tempoEstado = 0;
+unsigned long tempoSirene = 0;
+
+int freq = 700;
+int passo = 5;
+
+const int FREQ_MIN = 700;
+const int FREQ_MAX = 900;
+
+const unsigned long TEMPO_ARMING = 500;
+const unsigned long INTERVALO_SIRENE = 10;
+
+/* ===================== PROTÓTIPOS ===================== */
+void logMsg(const char* msg);
+void mudarEstado(EstadoSistema novoEstado);
+bool processarTeclado(char tecla);
+void atualizarSirene();
+
+/* ===================== FUNÇÕES ===================== */
+void logMsg(const char* msg) {
+  if (DEBUG) Serial.println(msg);
+}
+
+void mudarEstado(EstadoSistema novoEstado) {
+  estadoAtual = novoEstado;
+  tempoEstado = millis();
+
+  switch (estadoAtual) {
+    case STANDBY:
+      digitalWrite(PIN_LED, LOW);
+      noTone(PIN_BUZZER);
+      codigoDigitado = "";
+      logMsg("Estado: STANDBY");
+      break;
+
+    case ARMING:
+      codigoDigitado = "";
+      logMsg("Estado: ARMING");
+      break;
+
+    case ARMED:
+      digitalWrite(PIN_LED, HIGH);
+      codigoDigitado = "";
+      logMsg("Estado: ARMED");
+      break;
+
+    case TRIGGERED:
+      freq = FREQ_MIN;
+      passo = 5;
+      tempoSirene = millis();
+      logMsg("Estado: TRIGGERED");
+      break;
+  }
+}
+
+bool processarTeclado(char tecla) {
+  if (!tecla) return false;
+
+  if (tecla == '*') {
+    codigoDigitado = "";
+    return false;
+  }
+
+  if (tecla == '#') {
+    bool valido = (codigoDigitado == CODIGO_CORRECTO);
+    codigoDigitado = "";
+    return valido;
+  }
+
+  if (tecla >= '0' && tecla <= '9') {
+    if (codigoDigitado.length() < 4) {
+      codigoDigitado += tecla;
+    }
+  }
+
+  return false;
+}
+
+void atualizarSirene() {
+  if (millis() - tempoSirene < INTERVALO_SIRENE) return;
+  tempoSirene = millis();
+
+  tone(PIN_BUZZER, freq);
+
+  freq += passo;
+  if (freq >= FREQ_MAX || freq <= FREQ_MIN) {
+    passo = -passo;
+  }
+}
+
+/* ===================== SETUP ===================== */
+void setup() {
+  if (DEBUG) Serial.begin(BAUD_RATE);
+
+  pinMode(PIN_LED, OUTPUT);
+  pinMode(PIN_BUZZER, OUTPUT);
+  pinMode(PIN_PIR, INPUT);
+  pinMode(PIN_BOTAO, INPUT);   // pull-down externo
+
+  digitalWrite(PIN_LED, LOW);
+  noTone(PIN_BUZZER);
+
+  mudarEstado(STANDBY);
+}
+
+/* ===================== LOOP ===================== */
+void loop() {
+  char tecla = keypad.getKey();
+
+  if (estadoAtual != STANDBY && processarTeclado(tecla)) {
+    logMsg("Código correcto. Sistema desarmado.");
+    mudarEstado(STANDBY);
+    return;
+  }
+
+  switch (estadoAtual) {
+
+    case STANDBY:
+      if (digitalRead(PIN_BOTAO) == HIGH) {
+        mudarEstado(ARMING);
+      }
+      break;
+
+    case ARMING:
+      if (millis() - tempoEstado >= TEMPO_ARMING) {
+        mudarEstado(ARMED);
+      }
+      break;
+
+    case ARMED:
+      if (digitalRead(PIN_PIR) == HIGH) {
+        mudarEstado(TRIGGERED);
+      }
+      break;
+
+    case TRIGGERED:
+      atualizarSirene();
+      break;
+  }
+}
